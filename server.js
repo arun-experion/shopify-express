@@ -1,7 +1,7 @@
 const express = require('express');
 const axios = require('axios');
 const cors = require('cors');
-const PORT = 3000;
+PORT = process.env.PORT || 3000;
 const app = express();
 
 require('dotenv').config();
@@ -489,5 +489,5 @@ app.get('/api/user-interactions', async(req,res)=>{
 });
 
 app.listen(PORT, () => {
-  console.log(`Server running on http://localhost:${PORT}`);
+  console.log(`Server running on port ${PORT}`);
 });
