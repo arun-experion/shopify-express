@@ -1,17 +1,83 @@
 const express = require('express');
 const axios = require('axios');
 const cors = require('cors');
+const PORT = 3000;
+const app = express();
+
 require('dotenv').config();
 
-const app = express();
-const PORT = 3000;
-
-const SHOPIFY_STORE = 'kavithabs-store.myshopify.com';
-// const SHOPIFY_STORE = 'test-store-treesa.myshopify.com';
-const ADMIN_API_TOKEN = process.env.SHOPIFY_ACCESS_TOKEN
-
-app.use(cors());
 app.use(express.json());
+
+// add the origins eg http://localhost:3000, https://yourdomain.com in env variable for CORS error handling
+app.use(cors({
+  origin: process.env.CORS_ORIGINS ? process.env.CORS_ORIGINS.split(',') : [],
+  methods: ['GET', 'POST', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization']
+}));
+
+// const SHOPIFY_STORE = 'test-store-treesa';
+const SHOPIFY_STORE = process.env.STORE_NAME;
+const ADMIN_API_TOKEN = process.env.SHOPIFY_ACCESS_TOKEN
+const API_VERSION=process.env.API_VERSION;
+
+// helper function to construct Shopify API URL
+function getShopifyApiUrl(endpoint){
+  return `https://${SHOPIFY_STORE}.myshopify.com/admin/api/${API_VERSION}/${endpoint}`
+};
+
+//helper function to update customer interactions
+async function updateCustomerInteractions(customerId, newEvent) {
+  try{
+    const metafieldResponse = await axios.get(
+      getShopifyApiUrl(`customers/${customerId}/metafields.json?namespace=custom&key=customer_interactions`),
+      { headers: { 'X-Shopify-Access-Token': ADMIN_API_TOKEN } }
+    );
+    const existingMetafield = metafieldResponse.data.metafields[0];
+    let currentInteractions = [];
+    if(existingMetafield){
+      try{
+        currentInteractions=JSON.parse(existingMetafield.value);
+        if(!Array.isArray(currentInteractions)){
+          currentInteractions = [currentInteractions];
+        }
+      }
+      catch(e){
+        console.error('Error parsing existing interactions:', e);
+      }
+    }
+
+    currentInteractions.push(newEvent);
+
+    const metafieldData={
+      metafield:{
+        namespace: 'custom',
+        key: 'customer_interactions',
+        type: 'json',
+        value: JSON.stringify(currentInteractions)
+      }
+    };
+
+    if(existingMetafield){
+      await axios.put(
+        getShopifyApiUrl(`metafields/${existingMetafield.id}.json`),
+        metafieldData,
+        { headers: { 'X-Shopify-Access-Token': ADMIN_API_TOKEN } }
+      );
+    }
+    else{
+      axios.post(
+        getShopifyApiUrl(`customers/${customerId}/metafields.json`),
+        metafieldData,
+        { headers: { 'X-Shopify-Access-Token': ADMIN_API_TOKEN } }
+      );
+    }
+    return true;
+  }
+  catch(error){
+    console.error('Error updating customer interactions:', error.response?.data || error.message);
+    throw new Error('Failed to update customer interactions');
+  }
+}
 
 // Update customer
 app.put('/update-customer/:customerId', async (req, res) => {
@@ -309,6 +375,115 @@ app.get('/customer-favorite-spa/:customerId', async (req, res) => {
     res.status(500).json({ 
       error: 'Failed to get customer favorite spa',
       details: error.response?.data || error.message 
+    });
+  }
+});
+
+// endpoint to post add to cart user interactions
+app.post('/api/track-add-to-cart',async (req,res)=>{
+  try{
+    const{productId, variantId, customerId, visitorId}=req.body;
+
+  if(!customerId &&!visitorId){
+    return res.status(400).json({
+      succcess:false,
+      error:'customerId or visitorId is required'
+    })
+  }
+
+  const newEvent={
+    eventType:'add_to_cart',
+    productId,
+    variantId,
+    customerId: customerId || null,
+    visitorId,
+    timestamp: new Date().toISOString()
+  }
+
+  if(customerId){
+    await updateCustomerInteractions(customerId, newEvent);
+  }
+  res.json({ success: true });
+  }
+  catch(error){
+    console.error('Error tracking add-to-cart:', error.response?.data || error.message);
+    res.status(500).json({ success: false, error: 'Failed to track event' });
+  }
+});
+
+// endpoint to post wishlist user interactions
+app.post('/api/track-wishlist',async(req,res)=>{
+  try{
+    const{productId,variantId,customerId,visitorId,eventType}=req.body;
+    if(!customerId && !visitorId){
+      return res.status(400).json({
+        success:false,
+        error:'customerId or visitorId is required'
+      })
+    }
+
+    const newEvent = {
+      eventType: eventType,
+      productId,
+      variantId,
+      customerId: customerId || null,
+      visitorId,
+      timestamp: new Date().toISOString()
+    };
+
+    if(customerId){
+      await updateCustomerInteractions(customerId, newEvent);
+    }
+    res.json({ success: true });
+  }
+  catch(error){
+    console.error('Error tracking wishlist:', error.response?.data || error.message);
+    res.status(500).json({ success: false, error: 'Failed to track wishlist event' });
+  }
+});
+
+// endpoint to get user interactions
+app.get('/api/user-interactions', async(req,res)=>{
+  try{
+    const {customer_id}= req.query;
+    if(!customer_id){
+      return res.status(400).json({
+        success: false,
+        message: 'customer_id parameter is required'
+      });
+    }
+
+    const response=await axios.get(
+      getShopifyApiUrl(`customers/${customer_id}/metafields.json?namespace=custom&key=customer_interactions`),
+      { headers: { 'X-Shopify-Access-Token': ADMIN_API_TOKEN } }
+    );
+
+    let interactions = [];
+    if(response.data.metafields?.length>0){
+      try{
+        interactions = JSON.parse(response.data.metafields[0].value);
+        if(!Array.isArray(interactions)){
+          interactions = [interactions];
+        }
+      }
+      catch(e){
+        console.error('Error parsing interactions:', e);
+      }
+    }
+
+    interactions.sort((a,b)=> new Date(b.timestamp)-new Date(a.timestamp));
+    res.json({
+      success: true,
+      count: interactions.length,
+      interactions
+    });
+  }
+  catch(error){
+    console.error('Error fetching user interactions:', error.message);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch interaction data',
+      error: error.response?.data?.errors || error.message
     });
   }
 });
