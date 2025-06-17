@@ -457,7 +457,6 @@ app.get('/api/user-interactions', async(req,res)=>{
       getShopifyApiUrl(`customers/${customer_id}/metafields.json?namespace=custom&key=customer_interactions`),
       { headers: { 'X-Shopify-Access-Token': ADMIN_API_TOKEN } }
     );
-
     let interactions = [];
     if(response.data.metafields?.length>0){
       try{
@@ -487,6 +486,59 @@ app.get('/api/user-interactions', async(req,res)=>{
     });
   }
 });
+
+
+// NEW: Get customer's used discount codes with order info
+app.get('/api/customer-discount-usage', async (req, res) => {
+  try {
+    const {customer_id}= req.query;
+    console.log("customer_id", customer_id)
+
+    if(!customer_id){
+        return res.status(400).json({
+          success: false,
+          message: 'customer_id parameter is required'
+        });
+    }
+
+    const response=await axios.get(
+      getShopifyApiUrl(`customers/${customer_id}/metafields.json?namespace=custom&key=discount_usage`),
+      { headers: { 'X-Shopify-Access-Token': ADMIN_API_TOKEN } }
+    );
+
+    if(response.data.metafields?.length>0){
+      try{
+        const discountInfo = JSON.parse(response.data.metafields[0].value);
+        res.json({
+          success: true,
+          count: discountInfo.length,
+          discountInfo
+        });
+      }
+      catch(e){
+        console.error('Error parsing discount info:', e);
+         res.json({
+          success: false,
+          message: "Error parsing discount info",
+          error: e
+        });
+      }
+    } else {
+      res.json({
+          success: false,
+          message: "Discount data not available for this user",
+          error: e
+        });
+    }
+  } catch (error) {
+    console.error('Error getting discount usage:', error.response?.data || error.message);
+    res.status(500).json({
+      error: 'Failed to get discount usage for customer',
+      details: error.response?.data || error.message
+    });
+  }
+});
+
 
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
